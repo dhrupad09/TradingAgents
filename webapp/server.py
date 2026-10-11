@@ -24,6 +24,8 @@ from pydantic import BaseModel
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+from webapp.quick_signal import compute_quick_signal
+
 APP_PASSWORD = os.environ.get("WEBAPP_PASSWORD", "")
 
 app = FastAPI()
@@ -83,6 +85,15 @@ def analyze(req: AnalyzeRequest, x_password: str | None = Header(default=None)):
     thread = threading.Thread(target=_run_job, args=(job_id, req.ticker.strip().upper(), req.date.strip()), daemon=True)
     thread.start()
     return {"job_id": job_id}
+
+
+@app.post("/api/quick")
+def quick(req: AnalyzeRequest, x_password: str | None = Header(default=None)):
+    check_password(x_password)
+    try:
+        return compute_quick_signal(req.ticker.strip().upper(), req.date.strip())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=200)
 
 
 @app.get("/api/status/{job_id}")

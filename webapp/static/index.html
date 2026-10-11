@@ -25,6 +25,7 @@
     color: white; font-size: 16px; font-weight: 600; cursor: pointer;
   }
   button:disabled { background: #2a2e38; color: #6b7280; }
+  button.secondary { background: #2a2e38; color: #c7cad1; }
   .status { margin-top: 14px; font-size: 14px; color: #9aa0ad; display: flex; align-items: center; gap: 8px; }
   .spinner {
     width: 14px; height: 14px; border: 2px solid #2a2e38; border-top-color: #4f7cff;
@@ -67,7 +68,9 @@
     <input id="ticker" type="text" value="NVDA" autocapitalize="characters" autocomplete="off">
     <label for="date">Analysis date</label>
     <input id="date" type="date">
-    <button id="runBtn">Run Analysis</button>
+    <button id="quickBtn" class="secondary">⚡ Quick Signal (instant, free)</button>
+    <div style="height:10px"></div>
+    <button id="runBtn">Run Full Analysis</button>
     <div class="status" id="statusLine" hidden>
       <div class="spinner"></div>
       <span id="statusText">Starting…</span>
@@ -180,6 +183,27 @@ $('runBtn').addEventListener('click', async () => {
     $('statusLine').hidden = true;
     $('runBtn').disabled = false;
     $('result').innerHTML = `<div class="card error">${e.message}</div>`;
+  }
+});
+
+$('quickBtn').addEventListener('click', async () => {
+  const ticker = $('ticker').value.trim();
+  const date = $('date').value;
+  if (!ticker || !date) return;
+  $('quickBtn').disabled = true;
+  $('runBtn').disabled = true;
+  $('statusLine').hidden = false;
+  $('statusText').textContent = 'Computing…';
+  $('result').innerHTML = '';
+  try {
+    const job = await api('/api/quick', { method: 'POST', body: JSON.stringify({ ticker, date }) });
+    $('statusLine').hidden = true;
+    renderResult(job);
+  } catch (e) {
+    $('result').innerHTML = `<div class="card error">${e.message}</div>`;
+  } finally {
+    $('quickBtn').disabled = false;
+    $('runBtn').disabled = false;
   }
 });
 
