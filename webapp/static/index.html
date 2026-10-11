@@ -52,6 +52,26 @@
   .providercard { border: 1px solid #2a2e38; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
   .providercard .phead { padding: 10px 14px; background: #1a1d24; font-size: 13px; font-weight: 700; color: #9aa0ad; display: flex; justify-content: space-between; align-items: center; }
   .providercard .pbody { padding: 12px 14px; }
+  .verdict { font-size: 22px; font-weight: 700; margin: 2px 0 4px; }
+  .verdict.up { color: #4ade80; } .verdict.down { color: #f87171; } .verdict.flat { color: #e8e9ec; }
+  .vsub { font-size: 13px; color: #9aa0ad; margin-bottom: 14px; }
+  .idxgrid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin-bottom: 4px; }
+  .tile { background: #0f1115; border: 1px solid #2a2e38; border-radius: 12px; padding: 12px; }
+  .tile .tname { font-size: 12px; color: #9aa0ad; }
+  .tile .tprice { font-size: 17px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pill.up { background: #1d3a26; color: #4ade80; } .pill.down { background: #3a1d1d; color: #f87171; } .pill.flat { background: #262a33; color: #9aa0ad; }
+  .srow { display: grid; grid-template-columns: 1fr 70px 52px; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; }
+  .sbar { height: 8px; background: #262a33; border-radius: 4px; position: relative; overflow: hidden; }
+  .sbar i { position: absolute; top: 0; bottom: 0; left: 50%; border-radius: 4px; }
+  .sbar i.up { background: #4ade80; } .sbar i.down { background: #f87171; }
+  .sval { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12px; }
+  .sval.up { color: #4ade80; } .sval.down { color: #f87171; } .sval.flat { color: #9aa0ad; }
+  .macrogrid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin-top: 12px; }
+  .macroitem { background: #0f1115; border: 1px solid #2a2e38; border-radius: 10px; padding: 8px 10px; }
+  .macroitem .mname { font-size: 11px; color: #9aa0ad; }
+  .macroitem .mval { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; margin-top: 2px; }
+  .sectionlabel { font-size: 13px; font-weight: 700; color: #9aa0ad; margin: 18px 0 8px; }
   details { margin-bottom: 10px; border: 1px solid #2a2e38; border-radius: 10px; overflow: hidden; }
   summary { padding: 12px 14px; cursor: pointer; font-size: 14px; font-weight: 600; background: #1a1d24; }
   .report-body { padding: 0 14px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: #c7cad1; }
@@ -249,6 +269,65 @@ function renderOneBrief(container, b) {
     ${b.unknown ? `<p style="margin:0;font-size:12px;color:#9aa0ad">${b.unknown}</p>` : ''}`;
 }
 
+function pillClass(chg) {
+  if (chg == null) return 'flat';
+  return Math.abs(chg) < 0.05 ? 'flat' : (chg > 0 ? 'up' : 'down');
+}
+function fmtPct(v) {
+  return v == null ? 'n/a' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;
+}
+function fmtPrice(v) {
+  return v == null ? '—' : `$${v.toFixed(2)}`;
+}
+
+function renderMarketOverview(b) {
+  const idx = b.indexes || [];
+  const chgs = idx.map(r => r.chg).filter(v => v != null);
+  const avg = chgs.length ? chgs.reduce((a, c) => a + c, 0) / chgs.length : 0;
+  const ups = chgs.filter(v => v > 0.05).length, downs = chgs.filter(v => v < -0.05).length;
+  let verdictText = 'A mixed day for stocks', verdictCls = 'flat';
+  if (chgs.length) {
+    if (ups === chgs.length || (avg > 0.3 && downs === 0)) { verdictText = avg > 1 ? 'Stocks are up strongly' : 'Stocks are up'; verdictCls = 'up'; }
+    else if (downs === chgs.length || (avg < -0.3 && ups === 0)) { verdictText = avg < -1 ? 'Stocks are down sharply' : 'Stocks are down'; verdictCls = 'down'; }
+  }
+
+  const tiles = idx.map(r => `
+    <div class="tile">
+      <div class="tname">${r.name}</div>
+      <div class="tprice">${fmtPrice(r.price)}</div>
+      <span class="pill ${pillClass(r.chg)}">${fmtPct(r.chg)}</span>
+    </div>`).join('');
+
+  const sectors = [...(b.sectors || [])].sort((a, c) => (c.chg ?? -99) - (a.chg ?? -99));
+  const maxAbs = Math.max(0.35, ...sectors.map(r => Math.abs(r.chg || 0)));
+  const sectorRows = sectors.map(r => {
+    const cls = pillClass(r.chg);
+    const w = Math.abs(r.chg || 0) / maxAbs * 50;
+    const bar = cls === 'flat' ? '' : (r.chg > 0
+      ? `<i class="up" style="left:50%;width:${w}%"></i>`
+      : `<i class="down" style="left:${50 - w}%;width:${w}%"></i>`);
+    return `<div class="srow"><div>${r.name}</div><div class="sbar">${bar}</div><div class="sval ${cls}">${fmtPct(r.chg)}</div></div>`;
+  }).join('');
+
+  const macro = (b.macro || []).map(r => `
+    <div class="macroitem">
+      <div class="mname">${r.name}</div>
+      <div class="mval ${pillClass(r.chg) === 'flat' ? '' : (r.chg > 0 ? 'pill-up-text' : 'pill-down-text')}" style="color:${r.chg == null ? '#9aa0ad' : (r.chg > 0 ? '#4ade80' : '#f87171')}">${fmtPct(r.chg)}</div>
+    </div>`).join('');
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="verdict ${verdictCls}">${verdictText}</div>
+    <div class="vsub">${b.date}</div>
+    <div class="idxgrid">${tiles}</div>
+    <div class="sectionlabel">Sectors</div>
+    ${sectorRows}
+    <div class="sectionlabel">Oil · gold · bonds</div>
+    <div class="macrogrid">${macro}</div>`;
+  return card;
+}
+
 function renderBrief(b) {
   const box = $('result');
   if (b.status === 'error') {
@@ -256,10 +335,7 @@ function renderBrief(b) {
     return;
   }
   box.innerHTML = '';
-  const idxCard = document.createElement('div');
-  idxCard.className = 'card';
-  idxCard.innerHTML = (b.indexes || []).map(l => `<div style="font-size:13px;color:#9aa0ad">${l}</div>`).join('');
-  box.appendChild(idxCard);
+  box.appendChild(renderMarketOverview(b));
   for (const [provider, r] of Object.entries(b.results || {})) {
     const card = document.createElement('div');
     card.className = 'providercard';

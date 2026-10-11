@@ -123,7 +123,12 @@ def compute_market_brief(as_of_date: str, providers: list[str] | None = None) ->
         return {"status": "error", "error": "No LLM provider has an API key configured."}
 
     prompt = _build_prompt(as_of_date, moves)
-    index_lines = [f"{name}: {_fmt_pct(moves.get(sym, {}).get('chg'))}" for sym, name in INDEXES]
+
+    def rows(group):
+        return [
+            {"sym": sym, "name": name, **moves.get(sym, {"price": None, "chg": None})}
+            for sym, name in group
+        ]
 
     results = {}
     with ThreadPoolExecutor(max_workers=max(1, len(chosen))) as pool:
@@ -136,6 +141,8 @@ def compute_market_brief(as_of_date: str, providers: list[str] | None = None) ->
         "status": "done",
         "mode": "brief",
         "date": as_of_date,
-        "indexes": index_lines,
+        "indexes": rows(INDEXES),
+        "sectors": rows(SECTORS),
+        "macro": rows(MACRO),
         "results": results,
     }
