@@ -39,6 +39,11 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+# Mobile-friendly web UI (webapp/server.py). pip install ".[web]".
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

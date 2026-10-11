@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TradingAgents</title>
+<style>
+  :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #e8e9ec; min-height: 100vh;
+  }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 20px; font-weight: 700; margin: 8px 0 20px; display: flex; align-items: center; gap: 8px; }
+  .card { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 13px; color: #9aa0ad; margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #2a2e38;
+    background: #0f1115; color: #e8e9ec; font-size: 16px; margin-bottom: 14px;
+  }
+  input:focus { outline: 2px solid #4f7cff; }
+  button {
+    width: 100%; padding: 14px; border-radius: 10px; border: none; background: #4f7cff;
+    color: white; font-size: 16px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { background: #2a2e38; color: #6b7280; }
+  .status { margin-top: 14px; font-size: 14px; color: #9aa0ad; display: flex; align-items: center; gap: 8px; }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid #2a2e38; border-top-color: #4f7cff;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .decision {
+    font-size: 15px; font-weight: 700; padding: 10px 14px; border-radius: 10px; margin-bottom: 10px;
+    display: inline-block;
+  }
+  .decision.buy, .decision.overweight { background: #1d3a26; color: #4ade80; }
+  .decision.sell, .decision.underweight { background: #3a1d1d; color: #f87171; }
+  .decision.hold, .decision.review { background: #3a331d; color: #facc15; }
+  details { margin-bottom: 10px; border: 1px solid #2a2e38; border-radius: 10px; overflow: hidden; }
+  summary { padding: 12px 14px; cursor: pointer; font-size: 14px; font-weight: 600; background: #1a1d24; }
+  .report-body { padding: 0 14px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: #c7cad1; }
+  .error { color: #f87171; font-size: 14px; white-space: pre-wrap; }
+  #pwGate { position: fixed; inset: 0; background: #0f1115; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  #pwGate .card { width: 100%; max-width: 360px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="pwGate" hidden>
+  <div class="card">
+    <h1>🔒 TradingAgents</h1>
+    <label for="pwInput">Password</label>
+    <input id="pwInput" type="password" autocomplete="current-password">
+    <button id="pwSubmit">Unlock</button>
+    <div class="error" id="pwError" hidden>Wrong password.</div>
+  </div>
+</div>
+
+<div class="wrap" id="main" hidden>
+  <h1>📈 TradingAgents</h1>
+
+  <div class="card">
+    <label for="ticker">Ticker</label>
+    <input id="ticker" type="text" value="NVDA" autocapitalize="characters" autocomplete="off">
+    <label for="date">Analysis date</label>
+    <input id="date" type="date">
+    <button id="runBtn">Run Analysis</button>
+    <div class="status" id="statusLine" hidden>
+      <div class="spinner"></div>
+      <span id="statusText">Starting…</span>
+    </div>
+  </div>
+
+  <div id="result"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function getPassword() {
+  try { return localStorage.getItem('ta_password') || ''; } catch (e) { return ''; }
+}
+function setPassword(p) {
+  try { localStorage.setItem('ta_password', p); } catch (e) {}
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ 'Content-Type': 'application/json', 'X-Password': getPassword() }, opts.headers || {});
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 401) throw new Error('UNAUTHORIZED');
+  if (!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+
+function showGate(show) {
+  $('pwGate').hidden = !show;
+  $('main').hidden = show;
+}
+
+async function tryUnlock(pw) {
+  setPassword(pw);
+  try {
+    await api('/api/status/_probe');
+    showGate(false);
+  } catch (e) {
+    if (e.message === 'UNAUTHORIZED') {
+      $('pwError').hidden = false;
+      showGate(true);
+    } else {
+      // probe 404 (unknown job) still means auth passed
+      showGate(false);
+    }
+  }
+}
+
+$('pwSubmit').addEventListener('click', () => tryUnlock($('pwInput').value));
+
+function decisionClass(decision) {
+  const d = (decision || '').toLowerCase();
+  if (d.includes('buy') || d.includes('overweight')) return 'buy';
+  if (d.includes('sell') || d.includes('underweight')) return 'sell';
+  return 'hold';
+}
+
+function renderResult(job) {
+  const box = $('result');
+  if (job.status === 'error') {
+    box.innerHTML = `<div class="card error">${job.error}</div>`;
+    return;
+  }
+  const sections = [
+    ['Final decision rationale', job.final_trade_decision],
+    ["Trader's plan", job.trader_investment_plan],
+    ['Fundamentals', job.fundamentals_report],
+    ['Technical / market', job.market_report],
+    ['News & macro', job.news_report],
+    ['Sentiment', job.sentiment_report],
+  ];
+  let html = `<div class="card"><div class="decision ${decisionClass(job.decision)}">${job.decision || 'REVIEW'}</div>`;
+  box.innerHTML = html + '</div>';
+  for (const [title, body] of sections) {
+    if (!body) continue;
+    const d = document.createElement('details');
+    d.innerHTML = `<summary>${title}</summary><div class="report-body"></div>`;
+    d.querySelector('.report-body').textContent = body;
+    box.appendChild(d);
+  }
+}
+
+async function pollJob(jobId) {
+  while (true) {
+    const job = await api('/api/status/' + jobId);
+    if (job.status === 'running') {
+      $('statusText').textContent = 'Agents are analyzing… this can take a few minutes';
+      await new Promise(r => setTimeout(r, 3000));
+      continue;
+    }
+    $('statusLine').hidden = true;
+    $('runBtn').disabled = false;
+    renderResult(job);
+    return;
+  }
+}
+
+$('runBtn').addEventListener('click', async () => {
+  const ticker = $('ticker').value.trim();
+  const date = $('date').value;
+  if (!ticker || !date) return;
+  $('runBtn').disabled = true;
+  $('statusLine').hidden = false;
+  $('statusText').textContent = 'Starting…';
+  $('result').innerHTML = '';
+  try {
+    const { job_id } = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ ticker, date }) });
+    await pollJob(job_id);
+  } catch (e) {
+    $('statusLine').hidden = true;
+    $('runBtn').disabled = false;
+    $('result').innerHTML = `<div class="card error">${e.message}</div>`;
+  }
+});
+
+(function init() {
+  $('date').value = new Date().toISOString().slice(0, 10);
+  if (getPassword()) {
+    tryUnlock(getPassword());
+  } else {
+    showGate(true);
+  }
+})();
+</script>
+</body>
+</html>
