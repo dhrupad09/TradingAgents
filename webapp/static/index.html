@@ -26,6 +26,11 @@
   }
   button:disabled { background: #2a2e38; color: #6b7280; }
   button.secondary { background: #2a2e38; color: #c7cad1; }
+  .linkbtn {
+    display: block; width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #a8823a;
+    background: transparent; color: #d4ae62; font-size: 16px; font-weight: 600; text-align: center;
+    text-decoration: none; box-sizing: border-box;
+  }
   .status { margin-top: 14px; font-size: 14px; color: #9aa0ad; display: flex; align-items: center; gap: 8px; }
   .spinner {
     width: 14px; height: 14px; border: 2px solid #2a2e38; border-top-color: #4f7cff;
@@ -39,6 +44,14 @@
   .decision.buy, .decision.overweight { background: #1d3a26; color: #4ade80; }
   .decision.sell, .decision.underweight { background: #3a1d1d; color: #f87171; }
   .decision.hold, .decision.review { background: #3a331d; color: #facc15; }
+  .providers { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .provchip { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 999px; border: 1px solid #2a2e38; background: #0f1115; font-size: 13px; cursor: pointer; user-select: none; }
+  .provchip.off { opacity: .4; cursor: not-allowed; }
+  .provchip input { width: auto; margin: 0; }
+  .provhead { font-size: 12px; color: #9aa0ad; margin-bottom: 8px; }
+  .providercard { border: 1px solid #2a2e38; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  .providercard .phead { padding: 10px 14px; background: #1a1d24; font-size: 13px; font-weight: 700; color: #9aa0ad; display: flex; justify-content: space-between; align-items: center; }
+  .providercard .pbody { padding: 12px 14px; }
   details { margin-bottom: 10px; border: 1px solid #2a2e38; border-radius: 10px; overflow: hidden; }
   summary { padding: 12px 14px; cursor: pointer; font-size: 14px; font-weight: 600; background: #1a1d24; }
   .report-body { padding: 0 14px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: #c7cad1; }
@@ -68,6 +81,8 @@
     <input id="ticker" type="text" value="NVDA" autocapitalize="characters" autocomplete="off">
     <label for="date">Analysis date</label>
     <input id="date" type="date">
+    <div class="provhead">Compare across models (applies to Full Analysis &amp; Market Brief)</div>
+    <div class="providers" id="providers"><span style="font-size:13px;color:#6b7280">Loading providers…</span></div>
     <button id="quickBtn" class="secondary">⚡ Quick Signal (instant, free)</button>
     <div style="height:10px"></div>
     <button id="runBtn">Run Full Analysis</button>
@@ -76,6 +91,15 @@
     <div class="status" id="statusLine" hidden>
       <div class="spinner"></div>
       <span id="statusText">Starting…</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <a href="https://claude.ai/artifact/Ess1Co14BakoNdvFrWEZ1S" target="_blank" rel="noopener" class="linkbtn">
+      🏛️ Open Daily Market Brief (Claude Artifact) ↗
+    </a>
+    <div style="font-size:12px;color:#6b7280;margin-top:8px">
+      Your real Robinhood-powered brief, opens on claude.ai in a new tab — sign in with your Claude account there.
     </div>
   </div>
 
@@ -110,6 +134,7 @@ async function tryUnlock(pw) {
   try {
     await api('/api/status/_probe');
     showGate(false);
+    loadProviders();
   } catch (e) {
     if (e.message === 'UNAUTHORIZED') {
       $('pwError').hidden = false;
@@ -117,11 +142,32 @@ async function tryUnlock(pw) {
     } else {
       // probe 404 (unknown job) still means auth passed
       showGate(false);
+      loadProviders();
     }
   }
 }
 
 $('pwSubmit').addEventListener('click', () => tryUnlock($('pwInput').value));
+
+let PROVIDERS = [];
+
+async function loadProviders() {
+  try {
+    const { providers } = await api('/api/providers');
+    PROVIDERS = providers;
+    $('providers').innerHTML = providers.map(p => `
+      <label class="provchip ${p.available ? '' : 'off'}" title="${p.available ? '' : 'Add ' + p.label + ' API key to .env to enable'}">
+        <input type="checkbox" value="${p.provider}" ${p.available ? '' : 'disabled'} ${p.available ? 'checked' : ''}>
+        ${p.label}${p.available ? '' : ' (no key)'}
+      </label>`).join('');
+  } catch (e) {
+    $('providers').innerHTML = '<span style="font-size:13px;color:#f87171">Could not load providers.</span>';
+  }
+}
+
+function selectedProviders() {
+  return Array.from($('providers').querySelectorAll('input[type=checkbox]:checked')).map(el => el.value);
+}
 
 function decisionClass(decision) {
   const d = (decision || '').toLowerCase();
@@ -130,29 +176,77 @@ function decisionClass(decision) {
   return 'hold';
 }
 
+function renderOneAnalysis(container, r) {
+  if (r.status === 'running') {
+    container.innerHTML = `<div class="status" style="margin:0"><div class="spinner"></div><span>Analyzing…</span></div>`;
+    return;
+  }
+  if (r.status === 'error') {
+    container.innerHTML = `<div class="error">${r.error}</div>`;
+    return;
+  }
+  const sections = [
+    ['Final decision rationale', r.final_trade_decision],
+    ["Trader's plan", r.trader_investment_plan],
+    ['Fundamentals', r.fundamentals_report],
+    ['Technical / market', r.market_report],
+    ['News & macro', r.news_report],
+    ['Sentiment', r.sentiment_report],
+  ];
+  container.innerHTML = `<div class="decision ${decisionClass(r.decision)}">${r.decision || 'REVIEW'}</div>`;
+  for (const [title, body] of sections) {
+    if (!body) continue;
+    const d = document.createElement('details');
+    d.innerHTML = `<summary>${title}</summary><div class="report-body"></div>`;
+    d.querySelector('.report-body').textContent = body;
+    container.appendChild(d);
+  }
+}
+
 function renderResult(job) {
   const box = $('result');
   if (job.status === 'error') {
     box.innerHTML = `<div class="card error">${job.error}</div>`;
     return;
   }
-  const sections = [
-    ['Final decision rationale', job.final_trade_decision],
-    ["Trader's plan", job.trader_investment_plan],
-    ['Fundamentals', job.fundamentals_report],
-    ['Technical / market', job.market_report],
-    ['News & macro', job.news_report],
-    ['Sentiment', job.sentiment_report],
-  ];
-  let html = `<div class="card"><div class="decision ${decisionClass(job.decision)}">${job.decision || 'REVIEW'}</div>`;
-  box.innerHTML = html + '</div>';
-  for (const [title, body] of sections) {
-    if (!body) continue;
-    const d = document.createElement('details');
-    d.innerHTML = `<summary>${title}</summary><div class="report-body"></div>`;
-    d.querySelector('.report-body').textContent = body;
-    box.appendChild(d);
+  // Quick Signal returns a flat shape (no provider involved).
+  if (!job.results) {
+    box.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'card';
+    renderOneAnalysis(card, job);
+    box.appendChild(card);
+    return;
   }
+  // Multi-provider comparison shape.
+  box.innerHTML = '';
+  for (const [provider, r] of Object.entries(job.results)) {
+    const card = document.createElement('div');
+    card.className = 'providercard';
+    const head = document.createElement('div');
+    head.className = 'phead';
+    head.textContent = r.label || provider;
+    const body = document.createElement('div');
+    body.className = 'pbody';
+    renderOneAnalysis(body, r);
+    card.appendChild(head);
+    card.appendChild(body);
+    box.appendChild(card);
+  }
+}
+
+function renderOneBrief(container, b) {
+  if (b.status === 'error') {
+    container.innerHTML = `<div class="error">${b.error}</div>`;
+    return;
+  }
+  const why = (b.why || []).map(x => `<li>${x}</li>`).join('');
+  container.innerHTML = `
+    <p style="margin:0 0 10px">${b.summary || ''}</p>
+    ${why ? `<ul style="margin:0 0 10px;padding-left:18px">${why}</ul>` : ''}
+    ${b.rotation ? `<p style="margin:0 0 10px"><b>Where the money is going:</b> ${b.rotation}</p>` : ''}
+    ${b.watch ? `<p style="margin:0 0 10px"><b>What to watch:</b> ${b.watch}</p>` : ''}
+    ${b.unknown ? `<p style="margin:0;font-size:12px;color:#9aa0ad">${b.unknown}</p>` : ''}`;
 }
 
 function renderBrief(b) {
@@ -161,17 +255,24 @@ function renderBrief(b) {
     box.innerHTML = `<div class="card error">${b.error}</div>`;
     return;
   }
-  const idx = (b.indexes || []).map(l => `<div>${l}</div>`).join('');
-  const why = (b.why || []).map(x => `<li>${x}</li>`).join('');
-  box.innerHTML = `
-    <div class="card">
-      <div style="font-size:13px;color:#9aa0ad;margin-bottom:10px">${idx}</div>
-      <p style="margin:0 0 10px">${b.summary || ''}</p>
-      ${why ? `<ul style="margin:0 0 10px;padding-left:18px">${why}</ul>` : ''}
-      ${b.rotation ? `<p style="margin:0 0 10px"><b>Where the money is going:</b> ${b.rotation}</p>` : ''}
-      ${b.watch ? `<p style="margin:0 0 10px"><b>What to watch:</b> ${b.watch}</p>` : ''}
-      ${b.unknown ? `<p style="margin:0;font-size:12px;color:#9aa0ad">${b.unknown}</p>` : ''}
-    </div>`;
+  box.innerHTML = '';
+  const idxCard = document.createElement('div');
+  idxCard.className = 'card';
+  idxCard.innerHTML = (b.indexes || []).map(l => `<div style="font-size:13px;color:#9aa0ad">${l}</div>`).join('');
+  box.appendChild(idxCard);
+  for (const [provider, r] of Object.entries(b.results || {})) {
+    const card = document.createElement('div');
+    card.className = 'providercard';
+    const head = document.createElement('div');
+    head.className = 'phead';
+    head.textContent = r.label || provider;
+    const body = document.createElement('div');
+    body.className = 'pbody';
+    renderOneBrief(body, r);
+    card.appendChild(head);
+    card.appendChild(body);
+    box.appendChild(card);
+  }
 }
 
 $('briefBtn').addEventListener('click', async () => {
@@ -184,7 +285,7 @@ $('briefBtn').addEventListener('click', async () => {
   $('statusText').textContent = 'Reading the market and writing the brief…';
   $('result').innerHTML = '';
   try {
-    const b = await api('/api/brief', { method: 'POST', body: JSON.stringify({ date }) });
+    const b = await api('/api/brief', { method: 'POST', body: JSON.stringify({ date, providers: selectedProviders() }) });
     $('statusLine').hidden = true;
     renderBrief(b);
   } catch (e) {
@@ -200,6 +301,7 @@ $('briefBtn').addEventListener('click', async () => {
 async function pollJob(jobId) {
   while (true) {
     const job = await api('/api/status/' + jobId);
+    renderResult(job);
     if (job.status === 'running') {
       $('statusText').textContent = 'Agents are analyzing… this can take a few minutes';
       await new Promise(r => setTimeout(r, 3000));
@@ -207,7 +309,6 @@ async function pollJob(jobId) {
     }
     $('statusLine').hidden = true;
     $('runBtn').disabled = false;
-    renderResult(job);
     return;
   }
 }
@@ -221,7 +322,7 @@ $('runBtn').addEventListener('click', async () => {
   $('statusText').textContent = 'Starting…';
   $('result').innerHTML = '';
   try {
-    const { job_id } = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ ticker, date }) });
+    const { job_id } = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ ticker, date, providers: selectedProviders() }) });
     await pollJob(job_id);
   } catch (e) {
     $('statusLine').hidden = true;

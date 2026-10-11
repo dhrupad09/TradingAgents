@@ -8,12 +8,13 @@ Robinhood connector.
 """
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import yfinance as yf
 
-from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.llm_clients import create_tier_client
+from tradingagents.llm_clients.factory import create_llm_client
+from webapp.providers import available_providers, provider_label, provider_models
 
 INDEXES = [("SPY", "S&P 500"), ("QQQ", "Nasdaq 100"), ("DIA", "Dow Jones"), ("IWM", "Russell 2000 (small companies)")]
 SECTORS = [
@@ -91,34 +92,50 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(text)
 
 
-def compute_market_brief(as_of_date: str) -> dict:
+def _run_one_provider(provider: str, prompt: str) -> dict:
+    quick_model, _ = provider_models(provider)
+    try:
+        llm = create_llm_client(provider=provider, model=quick_model).get_llm()
+        response = llm.invoke(prompt)
+        raw = response.content if hasattr(response, "content") else str(response)
+        if isinstance(raw, list):
+            raw = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in raw)
+        brief = _parse_json_response(raw)
+        return {
+            "status": "done",
+            "summary": brief.get("summary", ""),
+            "why": brief.get("why", []),
+            "rotation": brief.get("rotation", ""),
+            "watch": brief.get("watch", ""),
+            "unknown": brief.get("unknown", ""),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": str(exc)}
+
+
+def compute_market_brief(as_of_date: str, providers: list[str] | None = None) -> dict:
     moves = _pct_changes(as_of_date)
     if not moves:
         return {"status": "error", "error": f"No market data available for {as_of_date}."}
 
+    chosen = [p for p in (providers or available_providers()) if p in available_providers()]
+    if not chosen:
+        return {"status": "error", "error": "No LLM provider has an API key configured."}
+
     prompt = _build_prompt(as_of_date, moves)
-    config = DEFAULT_CONFIG.copy()
-    llm = create_tier_client(config, "quick").get_llm()
-    response = llm.invoke(prompt)
-    raw = response.content if hasattr(response, "content") else str(response)
-    if isinstance(raw, list):
-        raw = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in raw)
-
-    try:
-        brief = _parse_json_response(raw)
-    except (json.JSONDecodeError, AttributeError):
-        return {"status": "error", "error": "The model's reply wasn't valid JSON. Try again.", "raw": raw}
-
     index_lines = [f"{name}: {_fmt_pct(moves.get(sym, {}).get('chg'))}" for sym, name in INDEXES]
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(chosen))) as pool:
+        futures = {pool.submit(_run_one_provider, p, prompt): p for p in chosen}
+        for future in as_completed(futures):
+            p = futures[future]
+            results[p] = {"label": provider_label(p), **future.result()}
 
     return {
         "status": "done",
         "mode": "brief",
         "date": as_of_date,
         "indexes": index_lines,
-        "summary": brief.get("summary", ""),
-        "why": brief.get("why", []),
-        "rotation": brief.get("rotation", ""),
-        "watch": brief.get("watch", ""),
-        "unknown": brief.get("unknown", ""),
+        "results": results,
     }

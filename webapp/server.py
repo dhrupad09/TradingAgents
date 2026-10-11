@@ -25,6 +25,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 from webapp.market_brief import compute_market_brief
+from webapp.providers import available_providers, list_providers, provider_label, provider_models
 from webapp.quick_signal import compute_quick_signal
 
 APP_PASSWORD = os.environ.get("WEBAPP_PASSWORD", "")
@@ -45,35 +46,71 @@ def check_password(x_password: str | None):
 class AnalyzeRequest(BaseModel):
     ticker: str
     date: str
+    providers: list[str] | None = None
 
 
 class BriefRequest(BaseModel):
     date: str
+    providers: list[str] | None = None
 
 
-def _run_job(job_id: str, ticker: str, date: str):
+def _resolve_providers(requested: list[str] | None) -> list[str]:
+    avail = available_providers()
+    chosen = [p for p in (requested or []) if p in avail]
+    if chosen:
+        return chosen
+    # No valid selection: fall back to whatever's configured as the default
+    # provider if it has a key, else the first available provider.
+    default = DEFAULT_CONFIG.get("llm_provider", "").lower()
+    if default in avail:
+        return [default]
+    return avail[:1]
+
+
+def _run_one_analysis(provider: str, ticker: str, date: str) -> dict:
     try:
+        quick_model, deep_model = provider_models(provider)
         config = DEFAULT_CONFIG.copy()
+        config["llm_provider"] = provider
+        config["quick_think_llm"] = quick_model
+        config["deep_think_llm"] = deep_model
+        config["quick_think_provider"] = None
+        config["deep_think_provider"] = None
+        config["backend_url"] = None
+        config["quick_think_backend_url"] = None
+        config["deep_think_backend_url"] = None
         ta = TradingAgentsGraph(debug=False, config=config)
         final_state, decision = ta.propagate(ticker, date)
-        with jobs_lock:
-            jobs[job_id] = {
-                "status": "done",
-                "decision": decision,
-                "market_report": final_state.get("market_report", ""),
-                "sentiment_report": final_state.get("sentiment_report", ""),
-                "news_report": final_state.get("news_report", ""),
-                "fundamentals_report": final_state.get("fundamentals_report", ""),
-                "trader_investment_plan": final_state.get("trader_investment_plan", ""),
-                "final_trade_decision": final_state.get("final_trade_decision", ""),
-            }
+        return {
+            "status": "done",
+            "decision": decision,
+            "market_report": final_state.get("market_report", ""),
+            "sentiment_report": final_state.get("sentiment_report", ""),
+            "news_report": final_state.get("news_report", ""),
+            "fundamentals_report": final_state.get("fundamentals_report", ""),
+            "trader_investment_plan": final_state.get("trader_investment_plan", ""),
+            "final_trade_decision": final_state.get("final_trade_decision", ""),
+        }
     except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
+        return {"status": "error", "error": str(exc), "trace": traceback.format_exc()}
+
+
+def _run_job(job_id: str, ticker: str, date: str, providers: list[str]):
+    with jobs_lock:
+        jobs[job_id] = {
+            "status": "running",
+            "results": {p: {"label": provider_label(p), "status": "running"} for p in providers},
+        }
+
+    def worker(provider: str):
+        result = _run_one_analysis(provider, ticker, date)
         with jobs_lock:
-            jobs[job_id] = {
-                "status": "error",
-                "error": str(exc),
-                "trace": traceback.format_exc(),
-            }
+            jobs[job_id]["results"][provider] = {"label": provider_label(provider), **result}
+            if all(r.get("status") in ("done", "error") for r in jobs[job_id]["results"].values()):
+                jobs[job_id]["status"] = "done"
+
+    for p in providers:
+        threading.Thread(target=worker, args=(p,), daemon=True).start()
 
 
 @app.get("/")
@@ -81,14 +118,20 @@ def index():
     return FileResponse(Path(__file__).resolve().parent / "static" / "index.html")
 
 
+@app.get("/api/providers")
+def providers(x_password: str | None = Header(default=None)):
+    check_password(x_password)
+    return {"providers": list_providers()}
+
+
 @app.post("/api/analyze")
 def analyze(req: AnalyzeRequest, x_password: str | None = Header(default=None)):
     check_password(x_password)
+    chosen = _resolve_providers(req.providers)
+    if not chosen:
+        raise HTTPException(status_code=400, detail="No LLM provider has an API key configured.")
     job_id = uuid.uuid4().hex
-    with jobs_lock:
-        jobs[job_id] = {"status": "running"}
-    thread = threading.Thread(target=_run_job, args=(job_id, req.ticker.strip().upper(), req.date.strip()), daemon=True)
-    thread.start()
+    threading.Thread(target=_run_job, args=(job_id, req.ticker.strip().upper(), req.date.strip(), chosen), daemon=True).start()
     return {"job_id": job_id}
 
 
@@ -104,8 +147,11 @@ def quick(req: AnalyzeRequest, x_password: str | None = Header(default=None)):
 @app.post("/api/brief")
 def brief(req: BriefRequest, x_password: str | None = Header(default=None)):
     check_password(x_password)
+    chosen = _resolve_providers(req.providers)
+    if not chosen:
+        raise HTTPException(status_code=400, detail="No LLM provider has an API key configured.")
     try:
-        return compute_market_brief(req.date.strip())
+        return compute_market_brief(req.date.strip(), providers=chosen)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=200)
 
