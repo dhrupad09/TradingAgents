@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+from webapp.market_brief import compute_market_brief
 from webapp.quick_signal import compute_quick_signal
 
 APP_PASSWORD = os.environ.get("WEBAPP_PASSWORD", "")
@@ -43,6 +44,10 @@ def check_password(x_password: str | None):
 
 class AnalyzeRequest(BaseModel):
     ticker: str
+    date: str
+
+
+class BriefRequest(BaseModel):
     date: str
 
 
@@ -92,6 +97,15 @@ def quick(req: AnalyzeRequest, x_password: str | None = Header(default=None)):
     check_password(x_password)
     try:
         return compute_quick_signal(req.ticker.strip().upper(), req.date.strip())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=200)
+
+
+@app.post("/api/brief")
+def brief(req: BriefRequest, x_password: str | None = Header(default=None)):
+    check_password(x_password)
+    try:
+        return compute_market_brief(req.date.strip())
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=200)
 

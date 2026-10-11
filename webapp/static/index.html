@@ -71,6 +71,8 @@
     <button id="quickBtn" class="secondary">⚡ Quick Signal (instant, free)</button>
     <div style="height:10px"></div>
     <button id="runBtn">Run Full Analysis</button>
+    <div style="height:10px"></div>
+    <button id="briefBtn" class="secondary">📰 Market Brief (whole market, 1 LLM call)</button>
     <div class="status" id="statusLine" hidden>
       <div class="spinner"></div>
       <span id="statusText">Starting…</span>
@@ -152,6 +154,48 @@ function renderResult(job) {
     box.appendChild(d);
   }
 }
+
+function renderBrief(b) {
+  const box = $('result');
+  if (b.status === 'error') {
+    box.innerHTML = `<div class="card error">${b.error}</div>`;
+    return;
+  }
+  const idx = (b.indexes || []).map(l => `<div>${l}</div>`).join('');
+  const why = (b.why || []).map(x => `<li>${x}</li>`).join('');
+  box.innerHTML = `
+    <div class="card">
+      <div style="font-size:13px;color:#9aa0ad;margin-bottom:10px">${idx}</div>
+      <p style="margin:0 0 10px">${b.summary || ''}</p>
+      ${why ? `<ul style="margin:0 0 10px;padding-left:18px">${why}</ul>` : ''}
+      ${b.rotation ? `<p style="margin:0 0 10px"><b>Where the money is going:</b> ${b.rotation}</p>` : ''}
+      ${b.watch ? `<p style="margin:0 0 10px"><b>What to watch:</b> ${b.watch}</p>` : ''}
+      ${b.unknown ? `<p style="margin:0;font-size:12px;color:#9aa0ad">${b.unknown}</p>` : ''}
+    </div>`;
+}
+
+$('briefBtn').addEventListener('click', async () => {
+  const date = $('date').value;
+  if (!date) return;
+  $('quickBtn').disabled = true;
+  $('runBtn').disabled = true;
+  $('briefBtn').disabled = true;
+  $('statusLine').hidden = false;
+  $('statusText').textContent = 'Reading the market and writing the brief…';
+  $('result').innerHTML = '';
+  try {
+    const b = await api('/api/brief', { method: 'POST', body: JSON.stringify({ date }) });
+    $('statusLine').hidden = true;
+    renderBrief(b);
+  } catch (e) {
+    $('statusLine').hidden = true;
+    $('result').innerHTML = `<div class="card error">${e.message}</div>`;
+  } finally {
+    $('quickBtn').disabled = false;
+    $('runBtn').disabled = false;
+    $('briefBtn').disabled = false;
+  }
+});
 
 async function pollJob(jobId) {
   while (true) {
